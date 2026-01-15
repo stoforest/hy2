@@ -1,0 +1,85 @@
+name: Test Docker Image
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build test image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64
+        push: false
+        load: true
+        tags: hysteria2:test
+        cache-from: type=gha
+
+    - name: Test container startup
+      run: |
+        # Test basic startup
+        docker run --rm -d --name test-container -p 7777:7777/udp hysteria2:test
+        
+        # Wait for container to start
+        sleep 10
+        
+        # Check if container is running
+        if ! docker ps | grep test-container; then
+          echo "Container failed to start"
+          docker logs test-container
+          exit 1
+        fi
+        
+        # Check container logs for success indicators
+        logs=$(docker logs test-container 2>&1)
+        echo "Container logs:"
+        echo "$logs"
+        
+        # Look for key indicators in logs
+        if echo "$logs" | grep -q "Hysteria2 server started"; then
+          echo "✓ Hysteria2 server started successfully"
+        else
+          echo "✗ Hysteria2 server startup not confirmed"
+          exit 1
+        fi
+        
+        # Test with custom password
+        docker stop test-container || true
+        docker run --rm -d --name test-container-pwd -e password=test123 -p 7778:7777/udp hysteria2:test
+        sleep 5
+        
+        if docker ps | grep test-container-pwd; then
+          echo "✓ Custom password test passed"
+        else
+          echo "✗ Custom password test failed"
+          docker logs test-container-pwd
+          exit 1
+        fi
+        
+        # Cleanup
+        docker stop test-container test-container-pwd || true
+
+    - name: Test configuration validation
+      run: |
+        # Test script syntax
+        docker run --rm hysteria2:test bash -n /app/start.sh
+        
+        # Test configuration generation
+        docker run --rm hysteria2:test cat /etc/hysteria/config.yaml
+        
+        echo "✓ All tests passed"

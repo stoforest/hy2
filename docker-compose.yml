@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  hysteria2:
+    build: .
+    image: hysteria2:latest
+    container_name: hysteria2
+    restart: unless-stopped
+    
+    # 端口映射（UDP）
+    ports:
+      - "7777:7777/udp"
+    
+    # 环境变量配置
+    environment:
+      - HY2_PORT=7777
+      # 可选：设置自定义密码，不设置则自动生成
+      # - password=your_custom_password_here
+    
+    # 持久化配置（可选）
+    # volumes:
+    #   - ./config:/app/config
+    
+    # 网络模式
+    network_mode: bridge
+
