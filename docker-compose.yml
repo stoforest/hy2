@@ -2,8 +2,7 @@ version: '3.8'
 
 services:
   hysteria2:
-    build: .
-    image: hysteria2:latest
+    image: stoforest/hysteria2:latest
     container_name: hysteria2
     restart: unless-stopped
     
