@@ -9,14 +9,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Docker tag to build'
+        description: 'Docker tag to build (only used for manual dispatch)'
         required: false
         default: 'latest'
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # 提前切到 Node.js 24 运行 JS actions，提前发现兼容性问题
+  # 提前使用 Node.js 24 执行 JS actions，避免 2026-06-02 后被动切换
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -35,15 +35,24 @@ jobs:
 
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 手动触发时，使用用户传入的 tag
+      - name: Set manual tag
+        if: github.event_name == 'workflow_dispatch'
+        id: manual_tag
+        run: |
+          echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      # 非手动触发：自动生成标准 tags（branch / pr / semver / latest）
       - name: Extract metadata
+        if: github.event_name != 'workflow_dispatch'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -54,8 +63,20 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+      # 手动触发时：构造完整镜像 tag
+      - name: Set manual image tag
+        if: github.event_name == 'workflow_dispatch'
+        id: manual_meta
+        run: |
+          FULL_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.manual_tag.outputs.tag }}"
+          echo "tags=$FULL_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${{ steps.manual_tag.outputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      # 构建（PR 不 push）
+      - name: Build and push Docker image (auto tags)
+        if: github.event_name != 'workflow_dispatch'
+        id: build_auto
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -65,11 +86,33 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Generate SBOM
-        if: github.event_name != 'pull_request'
+      - name: Build and push Docker image (manual tag)
+        if: github.event_name == 'workflow_dispatch'
+        id: build_manual
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.manual_meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 非手动触发：基于本次版本号生成 SBOM
+      - name: Generate SBOM (auto tags)
+        if: github.event_name != 'pull_request' && github.event_name != 'workflow_dispatch'
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      # 手动触发：基于手动 tag 生成 SBOM
+      - name: Generate SBOM (manual tag)
+        if: github.event_name == 'workflow_dispatch'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.manual_meta.outputs.version }}
           format: spdx-json
           output-file: sbom.spdx.json
 
